@@ -1,7 +1,7 @@
 import { AutomataCore, type Transition, type PDATransition, type TMTransition } from './automata-core';
 
 const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_KEY || '';
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 3;
 
 interface DFAIResult {
   valid: boolean; type: 'DFA'; explanation: string;
@@ -76,6 +76,18 @@ function validateResult(result: AnyResult, type: string): { valid: boolean; erro
   return { valid: validation.valid, errors: validation.errors };
 }
 
+function formatDFADescription(data: any): string {
+  const parts = [
+    `States: ${data.states?.join(', ')}`,
+    `Alphabet: ${data.alphabet?.join(', ')}`,
+    `Start: ${data.startState}`,
+    `Accept: ${data.acceptStates?.join(', ')}`,
+    `Transitions (${data.transitions?.length || 0}):`,
+    ...(data.transitions || []).map((t: any) => `  ${t.from} --${t.symbol}--> ${t.to}`)
+  ];
+  return parts.join('\n');
+}
+
 export class AutomataAI {
   static async generateFromQuestion(question: string, type: 'DFA'): Promise<DFAIResult>;
   static async generateFromQuestion(question: string, type: 'NFA'): Promise<NFAIResult>;
@@ -106,7 +118,7 @@ export class AutomataAI {
         'Authorization': `Bearer ${GROQ_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages,
         temperature: 0.1,
         max_tokens: 4096
@@ -124,8 +136,10 @@ export class AutomataAI {
 
     const validation = validateResult(result, type);
     if (!validation.valid && retries > 0) {
+      const d = result.data as any;
+      const currentDFA = formatDFADescription(d);
       return this.generateWithGroq(
-        `I previously tried "${question}" but the result had these errors:\n${validation.errors.join('\n')}\n\nPlease fix the errors and provide a correct ${type}. Reason step by step before giving the JSON.`,
+        `I need a ${type} for: "${question}"\n\nYour previous attempt had these validation errors:\n${validation.errors.join('\n')}\n\nHere is what you gave before:\n${currentDFA}\n\nPlease fix ALL errors and create a correct ${type}. Follow the reasoning template step by step.`,
         type,
         retries - 1
       );
@@ -135,34 +149,128 @@ export class AutomataAI {
   }
 
   private static getSystemPrompt(type: string) {
-    return `You are an expert in Automata Theory. Given a user request for a ${type}, you MUST reason step by step, then output a valid JSON object.
+    return `You are an expert Automata Theory professor. You MUST follow the REASONING TEMPLATE below step by step, then output the final JSON.
 
-## How to respond
+## REASONING TEMPLATE (MUST FOLLOW EVERY STEP)
 
-First, think through the problem carefully in the "explanation" field. Then put the final ${type} definition in the "data" field.
+### Step 1: Language Analysis
+- What strings should this automaton accept?
+- What strings should it reject?
+- Identify the key pattern or property.
 
-### DFA rules (critical):
-- Each state MUST have exactly one transition for every symbol in the alphabet. No exceptions.
-- The start state cannot be a comma-separated list; it is a single state name.
-- Accept states can be multiple, comma-separated in the string format.
-- All states must be reachable from the start state.
-- Use standard state names like q0, q1, q2, ...
+### Step 2: State Design
+- How many states are needed and why?
+- What does each state "remember" about the input so far?
+- Label states q0, q1, q2, ... with their meaning.
 
-### Output format for DFA:
+### Step 3: Transition Design
+- From each state, for EACH symbol in the alphabet, what is the next state?
+- For DFA: EVERY state MUST have exactly ONE transition for EVERY alphabet symbol.
+- Missing even one transition makes the DFA invalid.
+
+### Step 4: Accept States
+- Which states correspond to the language being accepted?
+- There can be ONE or MULTIPLE accept states.
+- The start state itself can be an accept state if ε (empty string) is in the language.
+
+### Step 5: Verification
+- Check: does every state have a transition for every alphabet symbol?
+- Check: are all accept states in the states list?
+- Check: is the start state a single state (not a list)?
+- Check: is every state reachable from the start state?
+- Check: trace a few example strings to verify correct acceptance/rejection.
+
+## SOLVED EXAMPLE: "DFA that accepts strings ending with 01 over {0,1}"
+
+Step 1: Language Analysis
+- Accept: strings ending with "01" (e.g., "01", "101", "00101")
+- Reject: strings not ending with "01" (e.g., "", "0", "1", "10", "00", "11")
+- Key pattern: we need to track the last two symbols seen.
+
+Step 2: State Design
+- q0: no suffix match (or just started / last seen "0" but need to track more)
+- q1: last symbol seen was "0" (partial match, expecting "1")
+- q2: suffix is "01" (accepting state, full match)
+Wait — let me redesign more carefully:
+- q0: haven't seen any useful suffix / last seen "1" (reset)
+- q1: last seen "0" (waiting for "1" to complete "01")
+- q2: just completed "01" (accept)
+
+Step 3: Transitions
+From q0 (reset / last was 1):
+- on 0 → q1 (now last seen 0)
+- on 1 → q0 (still reset)
+From q1 (last seen 0):
+- on 0 → q1 (still last seen 0)
+- on 1 → q2 (completed "01")
+From q2 (just completed "01"):
+- on 0 → q1 (last seen 0)
+- on 1 → q0 (last seen 1)
+
+Step 4: Accept States
+- Only q2 is accept (last two symbols were "01")
+
+Step 5: Verification
+- q0 has transitions on 0→q1, 1→q0 ✓
+- q1 has transitions on 0→q1, 1→q2 ✓
+- q2 has transitions on 0→q1, 1→q0 ✓
+- All states reachable ✓
+- Test "01": q0→0→q1→1→q2 ACCEPT ✓
+- Test "101": q0→1→q0→0→q1→1→q2 ACCEPT ✓
+- Test "10": q0→1→q0→0→q1 REJECT ✓
+- Test "": q0 REJECT ✓
+
+## SOLVED EXAMPLE: "DFA that accepts strings where the number of 0s is even"
+
+Step 1: Language Analysis
+- Accept: strings with even count of 0s (e.g., "", "1", "00", "11", "001", "010", "1100")
+- Reject: strings with odd count of 0s (e.g., "0", "01", "10", "000")
+- Key: we only need to track parity of 0s (even vs odd).
+
+Step 2: State Design
+- q0: even number of 0s seen (accept)
+- q1: odd number of 0s seen
+
+Step 3: Transitions
+From q0 (even):
+- on 0 → q1 (odd)
+- on 1 → q0 (still even)
+From q1 (odd):
+- on 0 → q0 (even)
+- on 1 → q1 (still odd)
+
+Step 4: Accept States
+- q0 is accept (even 0s — including empty string "")
+
+Step 5: Verification
+- q0: 0→q1, 1→q0 ✓
+- q1: 0→q0, 1→q1 ✓
+- Test "": q0 ACCEPT ✓
+- Test "00": q0→0→q1→0→q0 ACCEPT ✓
+- Test "0": q0→0→q1 REJECT ✓
+
+## OUTPUT FORMAT
+
+Put the JSON inside \`\`\`json ... \`\`\` markers.
+
+For DFA:
+\`\`\`json
 {
-  "explanation": "Step-by-step reasoning: first I understood the language, then determined the minimal states, then designed transitions ensuring each state has one transition per alphabet symbol, then marked accept states.",
+  "explanation": "Step 1: Language Analysis...\\nStep 2: State Design...\\nStep 3: Transitions...\\nStep 4: Accept States...\\nStep 5: Verification...",
   "data": {
-    "states": "q0,q1",
+    "states": "q0,q1,q2",
     "alphabet": "0,1",
     "startState": "q0",
-    "acceptStates": "q0",
-    "transitions": "q0,0,q1\\nq0,1,q0\\nq1,0,q1\\nq1,1,q0"
+    "acceptStates": "q2",
+    "transitions": "q0,0,q1\\nq0,1,q0\\nq1,0,q1\\nq1,1,q2\\nq2,0,q1\\nq2,1,q0"
   }
 }
+\`\`\`
 
-### Output format for NFA (supports ε transitions):
+For NFA:
+\`\`\`json
 {
-  "explanation": "Step-by-step reasoning...",
+  "explanation": "Step 1:...\\nStep 2:...\\nStep 3:...",
   "data": {
     "states": "q0,q1",
     "alphabet": "0,1",
@@ -171,10 +279,12 @@ First, think through the problem carefully in the "explanation" field. Then put 
     "transitions": "q0,0,q0\\nq0,0,q1\\nq0,1,q0\\nq1,1,q1"
   }
 }
+\`\`\`
 
-### Output format for PDA:
+For PDA:
+\`\`\`json
 {
-  "explanation": "Step-by-step reasoning...",
+  "explanation": "...",
   "data": {
     "states": "q0,q1,q2",
     "inputAlphabet": "a,b",
@@ -185,10 +295,12 @@ First, think through the problem carefully in the "explanation" field. Then put 
     "transitions": "q0,a,Z,q0,XZ\\nq0,a,X,q0,XX\\nq0,b,X,q1,ε\\nq1,b,X,q1,ε\\nq1,ε,Z,q2,Z"
   }
 }
+\`\`\`
 
-### Output format for TM:
+For TM:
+\`\`\`json
 {
-  "explanation": "Step-by-step reasoning...",
+  "explanation": "...",
   "data": {
     "states": "q0,qa,qr",
     "inputAlphabet": "0,1",
@@ -199,17 +311,18 @@ First, think through the problem carefully in the "explanation" field. Then put 
     "transitions": "q0,0,q1,X,R\\nq1,0,q1,0,R\\nq1,1,q2,Y,L\\nq2,0,q2,0,L\\nq2,X,q0,X,R\\nq0,Y,qa,Y,S"
   }
 }
+\`\`\`
 
-### Transition format rules:
-- DFA/NFA transitions: each line = "from,symbol,to"
-- PDA transitions: each line = "from,input,stackTop,to,stackPush"
-- TM transitions: each line = "from,read,to,write,direction"
-- Use \\n (escaped newline) between transition lines
-- Use ε (epsilon) for empty string transitions in NFA and PDA
+## CRITICAL RULES
+- DFA: EVERY state must have exactly ONE transition for EVERY alphabet symbol. This is non-negotiable.
+- Accept states: can be ONE or MULTIPLE states. List ALL of them.
+- Start state: is a SINGLE state name, never a comma-separated list.
+- Transition string: use \\n between lines. Each line format depends on type.
+- The "states" field is comma-separated state names.
+- Every state in transitions must be in the states list.
+- Every accept state must be in the states list.
 
-Requested type: ${type}
-
-IMPORTANT: Wrap the entire JSON in \`\`\`json ... \`\`\` markers.`;
+Requested type: ${type}`;
   }
 
   private static processAIResult(result: any, type: string): AnyResult {
