@@ -3,6 +3,7 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import WorkspaceNavbar from '@/components/WorkspaceNavbar';
 import { AutomataCore } from '@/lib/automata-core';
 import { AutomataVisualizer } from '@/lib/automata-visualizer';
+import { AutomataAI } from '@/lib/automata-ai';
 
 export default function CFGWorkspace() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -12,6 +13,8 @@ export default function CFGWorkspace() {
   const [startSymbol, setStartSymbol] = useState('');
   const [productions, setProductions] = useState('');
   const [messages, setMessages] = useState<Array<{ type: string; text: string }>>([]);
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
 
   const showMessage = useCallback((text: string, type: string) => {
@@ -26,6 +29,33 @@ export default function CFGWorkspace() {
     visualizerRef.current = new AutomataVisualizer(containerRef.current);
     visualizerRef.current.renderCFG(validationData as any);
   }, []);
+
+  const askAI = useCallback(async () => {
+    if (!aiQuestion) return;
+    setAiLoading(true);
+    try {
+      const result = await AutomataAI.generateFromQuestion(aiQuestion, 'CFG');
+      const newVars = result.data.variables.join(', ');
+      const newTerms = result.data.terminals.join(', ');
+      const newStart = result.data.startSymbol;
+      const newProds = result.data.productions.map((p: any) => `${p.variable}->${p.production}`).join('\n');
+
+      setVariables(newVars);
+      setTerminals(newTerms);
+      setStartSymbol(newStart);
+      setProductions(newProds);
+
+      if (result.explanation) showMessage(result.explanation, 'info');
+
+      const input = { variables: newVars, terminals: newTerms, startSymbol: newStart, productions: newProds };
+      const validation = AutomataCore.validateCFG(input);
+      if (validation.valid) doRender(validation.data);
+    } catch (error: any) {
+      showMessage(error.message, 'error');
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiQuestion, doRender, showMessage]);
 
   const generateCFG = useCallback(() => {
     const input = { variables, terminals, startSymbol, productions };
@@ -107,11 +137,39 @@ export default function CFGWorkspace() {
             <p className="text-gray-300 text-lg max-w-3xl mx-auto">Create, visualize, and validate context-free grammars</p>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="space-y-6">
-              <div className="glass-card rounded-2xl p-6">
-                <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
-                  <i className="fas fa-cog text-purple-400 mr-3" /> CFG Configuration
-                </h2>
+              <div className="space-y-6">
+                <div className="glass-card rounded-2xl p-6 border-2 border-purple-500/30 overflow-hidden relative group">
+                  <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition">
+                    <i className="fas fa-robot text-6xl" />
+                  </div>
+                  <h2 className="text-xl font-bold text-white mb-4 flex items-center">
+                    <i className="fas fa-magic text-purple-400 mr-3 animate-pulse" />
+                    AI Grammar Builder
+                  </h2>
+                  <div className="relative">
+                    <input type="text" className="input-field w-full pl-4 pr-12 py-3 rounded-xl text-sm" placeholder="e.g. 'CFG for palindromes over {a,b}'" value={aiQuestion} onChange={e => setAiQuestion(e.target.value)} onKeyDown={e => e.key === 'Enter' && askAI()} />
+                    <button onClick={askAI} className="absolute right-2 top-1 w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center hover:bg-purple-500 transition">
+                      <i className="fas fa-paper-plane text-white text-xs" />
+                    </button>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button className="text-[10px] text-purple-300 hover:text-white transition" onClick={() => setAiQuestion('Palindromes over {a, b}')}>&quot;Palindromes&quot;</button>
+                    <button className="text-[10px] text-purple-300 hover:text-white transition" onClick={() => setAiQuestion('Balanced parentheses')}>&quot;Balanced parentheses&quot;</button>
+                    <button className="text-[10px] text-purple-300 hover:text-white transition" onClick={() => setAiQuestion('Arithmetic expressions')}>&quot;Arithmetic expressions&quot;</button>
+                    <button className="text-[10px] text-purple-300 hover:text-white transition" onClick={() => setAiQuestion('a^n b^n')}>&quot;a^n b^n&quot;</button>
+                  </div>
+                  {aiLoading && (
+                    <div className="mt-4 text-center">
+                      <i className="fas fa-spinner fa-spin text-purple-400 mr-2" />
+                      <span className="text-xs text-gray-400">AI is thinking...</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="glass-card rounded-2xl p-6">
+                  <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+                    <i className="fas fa-cog text-purple-400 mr-3" /> CFG Configuration
+                  </h2>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-gray-300 font-medium mb-2 text-sm">Variables <span className="text-xs text-gray-500">(comma separated)</span></label>

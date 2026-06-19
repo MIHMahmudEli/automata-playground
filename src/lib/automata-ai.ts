@@ -1,4 +1,4 @@
-import { AutomataCore, type Transition, type PDATransition, type TMTransition } from './automata-core';
+import { AutomataCore, type Transition, type PDATransition, type TMTransition, type Production } from './automata-core';
 
 const GROQ_API_KEY = process.env.NEXT_PUBLIC_GROQ_KEY || '';
 const MAX_RETRIES = 3;
@@ -11,6 +11,10 @@ interface NFAIResult {
   valid: boolean; type: 'NFA'; explanation: string;
   data: { states: string[]; alphabet: string[]; startState: string; acceptStates: string[]; transitions: Transition[] };
 }
+interface CFGIResult {
+  valid: boolean; type: 'CFG'; explanation: string;
+  data: { variables: string[]; terminals: string[]; startSymbol: string; productions: Production[] };
+}
 interface PDAIResult {
   valid: boolean; type: 'PDA'; explanation: string;
   data: { states: string[]; inputAlphabet: string[]; stackAlphabet: string[]; startState: string; startStackSymbol: string; acceptStates: string[]; transitions: PDATransition[] };
@@ -20,7 +24,7 @@ interface TMIResult {
   data: { states: string[]; inputAlphabet: string[]; tapeAlphabet: string[]; startState: string; acceptState: string; rejectState: string; transitions: TMTransition[] };
 }
 
-type AnyResult = DFAIResult | NFAIResult | PDAIResult | TMIResult;
+type AnyResult = DFAIResult | NFAIResult | CFGIResult | PDAIResult | TMIResult;
 
 function extractJSON(text: string): any {
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -50,6 +54,13 @@ function validateResult(result: AnyResult, type: string): { valid: boolean; erro
       acceptStates: d.acceptStates?.join(','),
       transitions: d.transitions?.map((t: any) => `${t.from},${t.symbol},${t.to}`).join('\n')
     });
+  } else if (type === 'CFG') {
+    validation = AutomataCore.validateCFG({
+      variables: d.variables?.join(','),
+      terminals: d.terminals?.join(','),
+      startSymbol: d.startSymbol,
+      productions: d.productions?.map((p: any) => `${p.variable}->${p.production}`).join('\n')
+    });
   } else if (type === 'PDA') {
     validation = AutomataCore.validatePDA({
       states: d.states?.join(','),
@@ -76,29 +87,29 @@ function validateResult(result: AnyResult, type: string): { valid: boolean; erro
   return { valid: validation.valid, errors: validation.errors };
 }
 
-function formatDFADescription(data: any): string {
-  const parts = [
-    `States: ${data.states?.join(', ')}`,
-    `Alphabet: ${data.alphabet?.join(', ')}`,
-    `Start: ${data.startState}`,
-    `Accept: ${data.acceptStates?.join(', ')}`,
-    `Transitions (${data.transitions?.length || 0}):`,
-    ...(data.transitions || []).map((t: any) => `  ${t.from} --${t.symbol}--> ${t.to}`)
-  ];
-  return parts.join('\n');
+function formatDescription(data: any, type: string): string {
+  if (type === 'CFG') {
+    const prodStr = (data.productions || []).map((p: any) => `  ${p.variable} → ${p.production}`).join('\n');
+    return `Variables: ${data.variables?.join(', ')}\nTerminals: ${data.terminals?.join(', ')}\nStart: ${data.startSymbol}\nProductions:\n${prodStr}`;
+  }
+  if (type === 'DFA' || type === 'NFA') {
+    const transStr = (data.transitions || []).map((t: any) => `  ${t.from} --${t.symbol}--> ${t.to}`).join('\n');
+    return `States: ${data.states?.join(', ')}\nAlphabet: ${data.alphabet?.join(', ')}\nStart: ${data.startState}\nAccept: ${data.acceptStates?.join(', ')}\nTransitions:\n${transStr}`;
+  }
+  return '';
 }
 
 export class AutomataAI {
   static async generateFromQuestion(question: string, type: 'DFA'): Promise<DFAIResult>;
   static async generateFromQuestion(question: string, type: 'NFA'): Promise<NFAIResult>;
+  static async generateFromQuestion(question: string, type: 'CFG'): Promise<CFGIResult>;
   static async generateFromQuestion(question: string, type: 'PDA'): Promise<PDAIResult>;
   static async generateFromQuestion(question: string, type: 'TM'): Promise<TMIResult>;
   static async generateFromQuestion(question: string, type: string): Promise<AnyResult> {
     try {
       return await this.generateWithGroq(question, type, MAX_RETRIES);
     } catch {
-      const local = this.generateFromLocalPrompt(question, type);
-      return local;
+      return this.generateFromLocalPrompt(question, type);
     }
   }
 
@@ -137,9 +148,9 @@ export class AutomataAI {
     const validation = validateResult(result, type);
     if (!validation.valid && retries > 0) {
       const d = result.data as any;
-      const currentDFA = formatDFADescription(d);
+      const currentDesc = formatDescription(d, type);
       return this.generateWithGroq(
-        `I need a ${type} for: "${question}"\n\nYour previous attempt had these validation errors:\n${validation.errors.join('\n')}\n\nHere is what you gave before:\n${currentDFA}\n\nPlease fix ALL errors and create a correct ${type}. Follow the reasoning template step by step.`,
+        `I need a ${type} for: "${question}"\n\nYour previous attempt had these validation errors:\n${validation.errors.join('\n')}\n\nHere is what you gave before:\n${currentDesc}\n\nPlease fix ALL errors and create a correct ${type}. Follow the reasoning template step by step.`,
         type,
         retries - 1
       );
@@ -149,123 +160,151 @@ export class AutomataAI {
   }
 
   private static getSystemPrompt(type: string) {
-    return `You are an expert Automata Theory professor. You MUST follow the REASONING TEMPLATE below step by step, then output the final JSON.
+    const base = `You are an expert Automata Theory professor. You MUST follow the REASONING TEMPLATE below step by step, then output the final JSON.
 
 ## REASONING TEMPLATE (MUST FOLLOW EVERY STEP)
 
 ### Step 1: Language Analysis
-- What strings should this automaton accept?
-- What strings should it reject?
+- What strings should this grammar/automaton generate or accept?
+- What strings should it reject or not generate?
 - Identify the key pattern or property.
 
-### Step 2: State Design
-- How many states are needed and why?
-- What does each state "remember" about the input so far?
-- Label states q0, q1, q2, ... with their meaning.
+### Step 2: Structure Design
+- Design the components (states, variables, or transitions) needed.
+- Label everything clearly (q0, q1, ... or S, A, B, ...).
+- Explain what each component represents.
 
-### Step 3: Transition Design
-- From each state, for EACH symbol in the alphabet, what is the next state?
-- For DFA: EVERY state MUST have exactly ONE transition for EVERY alphabet symbol.
-- Missing even one transition makes the DFA invalid.
+### Step 3: Definition Design
+- Write out all transitions / productions / rules completely.
+- Ensure nothing is missing.
 
-### Step 4: Accept States
-- Which states correspond to the language being accepted?
-- There can be ONE or MULTIPLE accept states.
-- The start state itself can be an accept state if ε (empty string) is in the language.
+### Step 4: Verification
+- Check all structural rules are satisfied.
+- Trace a few example strings to verify correctness.`;
 
-### Step 5: Verification
-- Check: does every state have a transition for every alphabet symbol?
-- Check: are all accept states in the states list?
-- Check: is the start state a single state (not a list)?
-- Check: is every state reachable from the start state?
-- Check: trace a few example strings to verify correct acceptance/rejection.
+    if (type === 'CFG') {
+      return base + `
 
-## SOLVED EXAMPLE: "DFA that accepts strings ending with 01 over {0,1}"
+## SOLVED EXAMPLE 1: "CFG for balanced parentheses"
+
+Step 1: Language Analysis
+- Generate strings like "", "()", "(())", "()()", "((()))", ...
+- The number of opening and closing parens must be equal.
+- At no prefix should closing parens exceed opening parens.
+
+Step 2: Structure Design
+- One variable S is enough.
+- S can expand in two ways: nest or concatenate.
+
+Step 3: Productions
+S → (S)   (nesting)
+S → SS    (concatenation)
+S → ε     (base case — empty string)
+
+Step 4: Verification
+- "" → S ✓
+- "()" → S → (S) → () ✓
+- "()()" → S → SS → (S)S → ()S → ()(S) → ()() ✓
+- "(())" → S → (S) → ((S)) → (()) ✓
+
+## SOLVED EXAMPLE 2: "CFG for a^n b^n"
+
+Step 1: Language Analysis
+- Generate strings like "", "ab", "aabb", "aaabbb", ...
+- Equal number of 'a's followed by 'b's.
+
+Step 2: Structure Design
+- One variable S.
+- Each production adds one 'a' at start and one 'b' at end.
+
+Step 3: Productions
+S → aSb
+S → ε
+
+Step 4: Verification
+- "" → S ✓
+- "ab" → S → aSb → ab ✓
+- "aabb" → S → aSb → aaSbb → aabb ✓
+
+## OUTPUT FORMAT FOR CFG
+
+\`\`\`json
+{
+  "explanation": "Step 1: Language Analysis...\\nStep 2: Structure Design...\\nStep 3: Productions...\\nStep 4: Verification...",
+  "data": {
+    "variables": "S",
+    "terminals": "(, )",
+    "startSymbol": "S",
+    "productions": "S->(S)\\nS->SS\\nS->ε"
+  }
+}
+\`\`\`
+
+## CRITICAL RULES FOR CFG
+- Variables are uppercase by convention (S, A, B, ...). Terminals are lowercase or symbols.
+- Variables and terminals MUST NOT overlap (no symbol can be both).
+- Use "->" or "→" between variable and its production in the string format.
+- Use \\n between production lines.
+- Use ε for empty string productions.
+- Every variable used on the right side must be in the variables list.
+- Every terminal used in productions must be in the terminals list.
+- The start symbol must be one of the variables.
+- Productions field format: each line is "Variable->production" (e.g., "S->aSb" or "A->ε")
+
+Requested type: ${type}
+
+IMPORTANT: Wrap the entire JSON in \`\`\`json ... \`\`\` markers.`;
+    }
+
+    if (type === 'DFA') {
+      return base + `
+
+## SOLVED EXAMPLE 1: "DFA that accepts strings ending with 01 over {0,1}"
 
 Step 1: Language Analysis
 - Accept: strings ending with "01" (e.g., "01", "101", "00101")
 - Reject: strings not ending with "01" (e.g., "", "0", "1", "10", "00", "11")
-- Key pattern: we need to track the last two symbols seen.
 
 Step 2: State Design
-- q0: no suffix match (or just started / last seen "0" but need to track more)
-- q1: last symbol seen was "0" (partial match, expecting "1")
-- q2: suffix is "01" (accepting state, full match)
-Wait — let me redesign more carefully:
-- q0: haven't seen any useful suffix / last seen "1" (reset)
-- q1: last seen "0" (waiting for "1" to complete "01")
-- q2: just completed "01" (accept)
+- q0: reset / last seen "1" (no partial match)
+- q1: last seen "0" (partial match, expecting "1")
+- q2: completed "01" (accept)
 
 Step 3: Transitions
-From q0 (reset / last was 1):
-- on 0 → q1 (now last seen 0)
-- on 1 → q0 (still reset)
-From q1 (last seen 0):
-- on 0 → q1 (still last seen 0)
-- on 1 → q2 (completed "01")
-From q2 (just completed "01"):
-- on 0 → q1 (last seen 0)
-- on 1 → q0 (last seen 1)
+From q0:
+  on 0 → q1   on 1 → q0
+From q1:
+  on 0 → q1   on 1 → q2
+From q2:
+  on 0 → q1   on 1 → q0
 
-Step 4: Accept States
-- Only q2 is accept (last two symbols were "01")
+Step 4: Accept States: q2
+Verification: q0 has 0→q1,1→q0 ✓ | q1: 0→q1,1→q2 ✓ | q2: 0→q1,1→q0 ✓
 
-Step 5: Verification
-- q0 has transitions on 0→q1, 1→q0 ✓
-- q1 has transitions on 0→q1, 1→q2 ✓
-- q2 has transitions on 0→q1, 1→q0 ✓
-- All states reachable ✓
-- Test "01": q0→0→q1→1→q2 ACCEPT ✓
-- Test "101": q0→1→q0→0→q1→1→q2 ACCEPT ✓
-- Test "10": q0→1→q0→0→q1 REJECT ✓
-- Test "": q0 REJECT ✓
-
-## SOLVED EXAMPLE: "DFA that accepts strings where the number of 0s is even"
+## SOLVED EXAMPLE 2: "DFA that accepts strings where the number of 0s is even"
 
 Step 1: Language Analysis
-- Accept: strings with even count of 0s (e.g., "", "1", "00", "11", "001", "010", "1100")
-- Reject: strings with odd count of 0s (e.g., "0", "01", "10", "000")
-- Key: we only need to track parity of 0s (even vs odd).
+- Accept: even count of 0s (e.g., "", "1", "00", "11", "001", "010")
+- Reject: odd count of 0s (e.g., "0", "01", "10", "000")
 
 Step 2: State Design
-- q0: even number of 0s seen (accept)
-- q1: odd number of 0s seen
+- q0: even 0s (accept)
+- q1: odd 0s
 
 Step 3: Transitions
-From q0 (even):
-- on 0 → q1 (odd)
-- on 1 → q0 (still even)
-From q1 (odd):
-- on 0 → q0 (even)
-- on 1 → q1 (still odd)
+From q0: on 0 → q1  on 1 → q0
+From q1: on 0 → q0  on 1 → q1
 
-Step 4: Accept States
-- q0 is accept (even 0s — including empty string "")
+Step 4: Accept States: q0
 
-Step 5: Verification
-- q0: 0→q1, 1→q0 ✓
-- q1: 0→q0, 1→q1 ✓
-- Test "": q0 ACCEPT ✓
-- Test "00": q0→0→q1→0→q0 ACCEPT ✓
-- Test "0": q0→0→q1 REJECT ✓
+Requested type: ${type}
+
+IMPORTANT: Wrap the entire JSON in \`\`\`json ... \`\`\` markers.`;
+    }
+
+    return base + `
 
 ## OUTPUT FORMAT
-
-Put the JSON inside \`\`\`json ... \`\`\` markers.
-
-For DFA:
-\`\`\`json
-{
-  "explanation": "Step 1: Language Analysis...\\nStep 2: State Design...\\nStep 3: Transitions...\\nStep 4: Accept States...\\nStep 5: Verification...",
-  "data": {
-    "states": "q0,q1,q2",
-    "alphabet": "0,1",
-    "startState": "q0",
-    "acceptStates": "q2",
-    "transitions": "q0,0,q1\\nq0,1,q0\\nq1,0,q1\\nq1,1,q2\\nq2,0,q1\\nq2,1,q0"
-  }
-}
-\`\`\`
 
 For NFA:
 \`\`\`json
@@ -313,22 +352,21 @@ For TM:
 }
 \`\`\`
 
-## CRITICAL RULES
-- DFA: EVERY state must have exactly ONE transition for EVERY alphabet symbol. This is non-negotiable.
-- Accept states: can be ONE or MULTIPLE states. List ALL of them.
-- Start state: is a SINGLE state name, never a comma-separated list.
-- Transition string: use \\n between lines. Each line format depends on type.
-- The "states" field is comma-separated state names.
-- Every state in transitions must be in the states list.
-- Every accept state must be in the states list.
+## GENERAL RULES
+- Every component used in transitions/productions must be defined.
+- Use \\n between lines in string fields.
+- Fix any errors before outputting the final JSON.
 
-Requested type: ${type}`;
+Requested type: ${type}
+
+IMPORTANT: Wrap the entire JSON in \`\`\`json ... \`\`\` markers.`;
   }
 
   private static processAIResult(result: any, type: string): AnyResult {
     const d = result.data;
     if (type === 'DFA') return this.createDFA(d.states, d.alphabet, d.startState, d.acceptStates, d.transitions, result.explanation);
     if (type === 'NFA') return this.createNFA(d.states, d.alphabet, d.startState, d.acceptStates, d.transitions, result.explanation);
+    if (type === 'CFG') return this.createCFG(d.variables, d.terminals, d.startSymbol, d.productions, result.explanation);
     if (type === 'PDA') return this.createPDA(d.states, d.inputAlphabet, d.stackAlphabet, d.startState, d.startStackSymbol, d.acceptStates, d.transitions, result.explanation);
     if (type === 'TM') return this.createTM(d.states, d.inputAlphabet, d.tapeAlphabet, d.startState, d.acceptState, d.rejectState, d.transitions, result.explanation);
     throw new Error(`Unsupported type: ${type}`);
@@ -338,6 +376,13 @@ Requested type: ${type}`;
     const q = question.toLowerCase().trim();
     await new Promise(resolve => setTimeout(resolve, 500));
     const note = "\n\n(Note: Generated using local matching engine)";
+
+    if (type === 'CFG') {
+      if (q.includes('palindrom')) return this.createCFG('S', 'a,b', 'S', 'S->aSa\nS->bSb\nS->a\nS->b\nS->ε', "Palindromes over {a,b}." + note);
+      if (q.includes('parenthes') || (q.includes('balanced') && q.includes('('))) return this.createCFG('S', '(, )', 'S', 'S->(S)\nS->SS\nS->ε', "Balanced parentheses." + note);
+      if (q.includes("a^n") && q.includes("b^n")) return this.createCFG('S', 'a,b', 'S', 'S->aSb\nS->ε', "a^n b^n." + note);
+      if (q.includes('arithmetic') || q.includes('expression')) return this.createCFG('E,T,F', '+,*, (, ), id', 'E', 'E->E+T\nE->T\nT->T*F\nT->F\nF->(E)\nF->id', "Arithmetic expressions." + note);
+    }
 
     if (type === 'DFA') {
       if (q.includes('even') && q.includes('0')) return this.createDFA('q0,q1', '0,1', 'q0', 'q0', 'q0,0,q0\nq0,1,q1\nq1,0,q0\nq1,1,q1', "Even number of 0s." + note);
@@ -358,7 +403,7 @@ Requested type: ${type}`;
       return this.createTM('q0,q1,q2,q3,q4,qa,qr', '0,1', '0,1,X,Y,B', 'q0', 'qa', 'qr', 'q0,0,q1,X,R\nq1,0,q1,0,R\nq1,Y,q1,Y,R\nq1,1,q2,Y,L\nq2,0,q2,0,L\nq2,Y,q2,Y,L\nq2,X,q0,X,R\nq0,Y,q3,Y,R\nq3,Y,q3,Y,R\nq3,B,qa,B,R', "0^n 1^n TM." + note);
     }
 
-    throw new Error(`No matching pattern found for "${question}". Try 'even 0s', 'contains 101', etc.`);
+    throw new Error(`No matching pattern found for "${question}". Try 'palindromes', 'balanced parentheses', etc.`);
   }
 
   private static createDFA(states: string, alphabet: string, start: string, accept: string, transitions: string, explanation: string): DFAIResult {
@@ -367,6 +412,10 @@ Requested type: ${type}`;
 
   private static createNFA(states: string, alphabet: string, start: string, accept: string, transitions: string, explanation: string): NFAIResult {
     return { valid: true, type: 'NFA', explanation, data: { states: AutomataCore.parseCommaSeparated(states), alphabet: AutomataCore.parseCommaSeparated(alphabet), startState: start, acceptStates: AutomataCore.parseCommaSeparated(accept), transitions: AutomataCore.parseTransitions(transitions) } };
+  }
+
+  private static createCFG(variables: string, terminals: string, start: string, productions: string, explanation: string): CFGIResult {
+    return { valid: true, type: 'CFG', explanation, data: { variables: AutomataCore.parseCommaSeparated(variables), terminals: AutomataCore.parseCommaSeparated(terminals), startSymbol: start, productions: AutomataCore.parseProductions(productions) } };
   }
 
   private static createPDA(states: string, inputAlpha: string, stackAlpha: string, start: string, startStack: string, accept: string, transitions: string, explanation: string): PDAIResult {
