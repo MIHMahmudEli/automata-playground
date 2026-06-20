@@ -128,6 +128,36 @@ export class AutomataCore {
     return productive;
   }
 
+  static tokenizeProduction(production: string, variables: string[], terminals: string[]): string[] {
+    const tokens: string[] = [];
+    let i = 0;
+    while (i < production.length) {
+      if (production[i] === ' ') { i++; continue; }
+      let matched = false;
+      for (const v of variables) {
+        if (production.startsWith(v, i)) {
+          tokens.push(v);
+          i += v.length;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+      for (const t of terminals) {
+        if (production.startsWith(t, i)) {
+          tokens.push(t);
+          i += t.length;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+      tokens.push(production[i]);
+      i++;
+    }
+    return tokens;
+  }
+
   static findProductiveVariables(variables: string[], terminals: string[], productions: Production[]): Set<string> {
     const productive = new Set<string>();
     let changed = true;
@@ -136,8 +166,8 @@ export class AutomataCore {
       for (const prod of productions) {
         if (productive.has(prod.variable)) continue;
         let canProduce = true;
-        for (const symbol of prod.production.split('')) {
-          if (symbol === 'ε' || symbol === ' ') continue;
+        for (const symbol of this.tokenizeProduction(prod.production, variables, terminals)) {
+          if (symbol === 'ε') continue;
           if (!terminals.includes(symbol) && !productive.has(symbol)) {
             canProduce = false;
             break;
@@ -248,10 +278,14 @@ export class AutomataCore {
     const unreachable = states.filter(s => !reachable.has(s));
     if (unreachable.length > 0) warnings.push(`Unreachable states: ${unreachable.join(', ')}`);
 
+    const productive = this.findProductiveStates(states, acceptStates, transitions);
+    const dead = states.filter(s => !productive.has(s));
+    if (dead.length > 0 && dead.length < states.length) warnings.push(`Dead states: ${dead.join(', ')}`);
+
     return {
       valid: errors.length === 0,
       errors, warnings,
-      data: { states, alphabet, startState, acceptStates, transitions, reachableStates: Array.from(reachable) }
+      data: { states, alphabet, startState, acceptStates, transitions, reachableStates: Array.from(reachable), productiveStates: Array.from(productive) }
     };
   }
 
@@ -276,8 +310,9 @@ export class AutomataCore {
 
     for (const prod of productions) {
       if (!variables.includes(prod.variable)) errors.push(`Production variable "${prod.variable}" is not in the set of variables`);
-      for (const symbol of prod.production.split('')) {
-        if (symbol !== 'ε' && !variables.includes(symbol) && !terminals.includes(symbol) && symbol !== ' ') {
+      const tokens = this.tokenizeProduction(prod.production, variables, terminals);
+      for (const symbol of tokens) {
+        if (symbol !== 'ε' && !variables.includes(symbol) && !terminals.includes(symbol)) {
           warnings.push(`Symbol "${symbol}" in production "${prod.variable} → ${prod.production}" may be invalid`);
         }
       }
@@ -313,17 +348,41 @@ export class AutomataCore {
     if (inputAlphabet.length === 0) errors.push("At least one input symbol is required");
     if (stackAlphabet.length === 0) errors.push("At least one stack symbol is required");
     if (!startState) errors.push("Start state is required");
-    if (!startStackSymbol) errors.push("Start stack symbol is required");
+    else if (!states.includes(startState)) errors.push(`Start state "${startState}" is not in the set of states`);
+    if (startStackSymbol && !stackAlphabet.includes(startStackSymbol)) {
+      errors.push(`Start stack symbol "${startStackSymbol}" is not in the stack alphabet`);
+    }
+
+    for (const state of acceptStates) {
+      if (!states.includes(state)) errors.push(`Accept state "${state}" is not in the set of states`);
+    }
 
     for (const trans of transitions) {
       if (!states.includes(trans.from)) errors.push(`Invalid from state: ${trans.from}`);
       if (!states.includes(trans.to)) errors.push(`Invalid to state: ${trans.to}`);
+      if (trans.input !== 'ε' && !inputAlphabet.includes(trans.input)) {
+        errors.push(`Input symbol "${trans.input}" in transition is not in the input alphabet`);
+      }
+      if (trans.stackTop !== 'ε' && !stackAlphabet.includes(trans.stackTop)) {
+        errors.push(`Stack top symbol "${trans.stackTop}" is not in the stack alphabet`);
+      }
+      if (trans.stackPush !== 'ε') {
+        for (const sym of trans.stackPush.split('')) {
+          if (!stackAlphabet.includes(sym)) {
+            errors.push(`Stack push symbol "${sym}" in transition is not in the stack alphabet`);
+          }
+        }
+      }
     }
+
+    const reachable = this.findReachableStates(states, startState, transitions.map(t => ({ from: t.from, symbol: t.input, to: t.to })));
+    const unreachable = states.filter(s => !reachable.has(s));
+    if (unreachable.length > 0) warnings.push(`Unreachable states: ${unreachable.join(', ')}`);
 
     return {
       valid: errors.length === 0,
       errors, warnings,
-      data: { states, inputAlphabet, stackAlphabet, startState, startStackSymbol, acceptStates, transitions }
+      data: { states, inputAlphabet, stackAlphabet, startState, startStackSymbol, acceptStates, transitions, reachableStates: Array.from(reachable) }
     };
   }
 
@@ -346,7 +405,10 @@ export class AutomataCore {
     if (inputAlphabet.length === 0) errors.push("Input alphabet is required");
     if (tapeAlphabet.length === 0) errors.push("Tape alphabet is required");
     if (!startState) errors.push("Start state is required");
+    else if (!states.includes(startState)) errors.push(`Start state "${startState}" is not in the set of states`);
     if (!acceptState) errors.push("Accept state is required");
+    else if (!states.includes(acceptState)) errors.push(`Accept state "${acceptState}" is not in the set of states`);
+    if (rejectState && !states.includes(rejectState)) errors.push(`Reject state "${rejectState}" is not in the set of states`);
 
     for (const sym of inputAlphabet) {
       if (!tapeAlphabet.includes(sym)) warnings.push(`Input symbol "${sym}" is not in the tape alphabet`);
@@ -368,8 +430,7 @@ export class AutomataCore {
   }
 
   static simulateDFA(dfa: {
-    startState: string; acceptStates: string[]; transitionMap?: Map<string, string>;
-    transitions: Transition[]; states: string[]; alphabet: string[];
+    startState: string; acceptStates: string[]; transitions: Transition[]; states: string[]; alphabet: string[];
   }, inputString: string) {
     const steps: Array<{
       step: number; state: string; remaining: string; consumed: string;
@@ -377,12 +438,9 @@ export class AutomataCore {
     }> = [];
     let currentState = dfa.startState;
 
-    if (!dfa.transitionMap) {
-      const map = new Map<string, string>();
-      for (const t of dfa.transitions) {
-        map.set(`${t.from},${t.symbol}`, t.to);
-      }
-      dfa.transitionMap = map;
+    const transitionMap = new Map<string, string>();
+    for (const t of dfa.transitions) {
+      transitionMap.set(`${t.from},${t.symbol}`, t.to);
     }
 
     steps.push({ step: 0, state: currentState, remaining: inputString, consumed: '', accepted: dfa.acceptStates.includes(currentState) });
@@ -391,12 +449,12 @@ export class AutomataCore {
       const symbol = inputString[i];
       const key = `${currentState},${symbol}`;
 
-      if (!dfa.transitionMap.has(key)) {
+      if (!transitionMap.has(key)) {
         steps.push({ step: i + 1, state: 'ERROR', remaining: inputString.slice(i), consumed: inputString.slice(0, i), error: `No transition from "${currentState}" on "${symbol}"`, accepted: false });
         return { steps, accepted: false };
       }
 
-      currentState = dfa.transitionMap.get(key)!;
+      currentState = transitionMap.get(key)!;
       steps.push({ step: i + 1, state: currentState, remaining: inputString.slice(i + 1), consumed: inputString.slice(0, i + 1), symbol, accepted: dfa.acceptStates.includes(currentState) });
     }
 

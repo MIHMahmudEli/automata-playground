@@ -5,6 +5,28 @@ import { AutomataCore } from '@/lib/automata-core';
 
 type ConversionMode = 'nfa-to-dfa' | 're-to-nfa' | 'cfg-to-cnf';
 
+function tokenizeProduction(production: string, variables: string[], terminals: string[]): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  const sortedVars = [...variables].sort((a, b) => b.length - a.length);
+  const sortedTerms = [...terminals].sort((a, b) => b.length - a.length);
+  while (i < production.length) {
+    if (production[i] === ' ') { i++; continue; }
+    let matched = false;
+    for (const v of sortedVars) {
+      if (production.startsWith(v, i)) { tokens.push(v); i += v.length; matched = true; break; }
+    }
+    if (matched) continue;
+    for (const t of sortedTerms) {
+      if (production.startsWith(t, i)) { tokens.push(t); i += t.length; matched = true; break; }
+    }
+    if (matched) continue;
+    tokens.push(production[i]);
+    i++;
+  }
+  return tokens;
+}
+
 export default function ConversionsPage() {
   const [mode, setMode] = useState<ConversionMode>('nfa-to-dfa');
   const [steps, setSteps] = useState<string[]>([]);
@@ -201,19 +223,12 @@ export default function ConversionsPage() {
             } else if (c === '+') {
               const outer4 = createFragment(`q${counter++}`, `q${counter++}`);
               outer4.transitions.push({ from: outer4.start, symbol: 'ε', to: frag.start });
-              const [starFrag, _] = buildNFA('(' + re.substring(0, re.indexOf('+', i) > 0 ? re.indexOf('+', i) : re.length) + ')*', 0);
-              const outer4a = createFragment(`q${counter++}`, `q${counter++}`);
-              outer4a.transitions.push({ from: outer4a.start, symbol: 'ε', to: frag.start });
-              outer4a.transitions.push({ from: outer4a.start, symbol: 'ε', to: starFrag.start });
-              outer4a.transitions.push({ from: frag.accept, symbol: 'ε', to: outer4a.accept });
-              outer4a.transitions.push({ from: starFrag.accept, symbol: 'ε', to: outer4a.accept });
-              for (const s of frag.states) outer4a.states.add(s);
-              for (const s of starFrag.states) outer4a.states.add(s);
-              for (const t of frag.transitions) outer4a.transitions.push(t);
-              for (const t of starFrag.transitions) outer4a.transitions.push(t);
-              for (const a of frag.alphabet) outer4a.alphabet.add(a);
-              for (const a of starFrag.alphabet) outer4a.alphabet.add(a);
-              frag = outer4a;
+              outer4.transitions.push({ from: frag.accept, symbol: 'ε', to: frag.start });
+              outer4.transitions.push({ from: frag.accept, symbol: 'ε', to: outer4.accept });
+              for (const s of frag.states) outer4.states.add(s);
+              for (const t of frag.transitions) outer4.transitions.push(t);
+              for (const a of frag.alphabet) outer4.alphabet.add(a);
+              frag = outer4;
               i++;
             } else {
               const symbolFrag = createFragment(`q${counter++}`, `q${counter++}`);
@@ -283,7 +298,7 @@ export default function ConversionsPage() {
           changed = false;
           for (const p of productions) {
             if (nullable.has(p.variable)) continue;
-            if (p.production === 'ε' || p.production.split('').every(c => c === ' ' || nullable.has(c))) {
+            if (p.production === 'ε' || tokenizeProduction(p.production, parsed.variables, parsed.terminals).every(s => nullable.has(s))) {
               nullable.add(p.variable);
               changed = true;
             }
@@ -295,13 +310,21 @@ export default function ConversionsPage() {
         const newProductions: Array<{ variable: string; production: string }> = [];
         for (const p of productions) {
           if (p.production === 'ε') continue;
-          const symbols = p.production.split('').filter(c => c !== ' ');
-          const results: string[] = [p.production];
-          for (const n of nullable) {
-            const idx = symbols.indexOf(n);
-            if (idx >= 0) {
-              const without = symbols.filter((_, i) => i !== idx).join('');
-              if (without.length > 0 && !results.includes(without)) results.push(without);
+          const symbols = tokenizeProduction(p.production, parsed.variables, parsed.terminals);
+          const nullableIndices: number[] = [];
+          for (let i = 0; i < symbols.length; i++) {
+            if (nullable.has(symbols[i])) nullableIndices.push(i);
+          }
+          const results: string[] = [symbols.join('')];
+          const numCombos = 1 << nullableIndices.length;
+          for (let mask = 1; mask < numCombos; mask++) {
+            const filtered = symbols.filter((_, i) => {
+              const idx = nullableIndices.indexOf(i);
+              return idx < 0 || !(mask & (1 << idx));
+            });
+            if (filtered.length > 0) {
+              const variant = filtered.join('');
+              if (!results.includes(variant)) results.push(variant);
             }
           }
           for (const r of results) {
@@ -354,7 +377,7 @@ export default function ConversionsPage() {
         let termCounter = 0;
         const cnfProductions: Array<{ variable: string; production: string }> = [];
         for (const p of productions) {
-          const symbols = p.production.split('').filter(c => c !== ' ');
+          const symbols = tokenizeProduction(p.production, parsed.variables, parsed.terminals);
           if (symbols.length === 1 && parsed.terminals.includes(symbols[0])) {
             cnfProductions.push(p);
           } else if (symbols.length >= 2) {

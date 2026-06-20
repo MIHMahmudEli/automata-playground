@@ -50,6 +50,38 @@ export class AutomataVisualizer {
     this.renderGraph(elements, type);
   }
 
+  private tokenizeCFGProduction(production: string, variables: string[], terminals: string[]): string[] {
+    const tokens: string[] = [];
+    let i = 0;
+    while (i < production.length) {
+      if (production[i] === ' ') { i++; continue; }
+      let matched = false;
+      const sortedVars = [...variables].sort((a, b) => b.length - a.length);
+      const sortedTerms = [...terminals].sort((a, b) => b.length - a.length);
+      for (const v of sortedVars) {
+        if (production.startsWith(v, i)) {
+          tokens.push(v);
+          i += v.length;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+      for (const t of sortedTerms) {
+        if (production.startsWith(t, i)) {
+          tokens.push(t);
+          i += t.length;
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+      tokens.push(production[i]);
+      i++;
+    }
+    return tokens;
+  }
+
   renderCFG(data: {
     variables: string[]; terminals: string[]; startSymbol: string;
     productions: Array<{ variable: string; production: string }>;
@@ -77,7 +109,7 @@ export class AutomataVisualizer {
 
     let edgeId = 0;
     for (const prod of data.productions) {
-      const symbols = prod.production.split('').filter(s => s !== ' ');
+      const symbols = this.tokenizeCFGProduction(prod.production, data.variables, data.terminals);
       for (const symbol of symbols) {
         if (symbol === 'ε') continue;
         const targetId = data.variables.includes(symbol) ? symbol : `term_${symbol}`;
