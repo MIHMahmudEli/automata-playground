@@ -18,13 +18,13 @@ export default function RegexWorkspace() {
   return (
     <>
       <WorkspaceNavbar title="Regular Expressions" subtitle="Pattern Matching & Formal Languages" />
-      <div className="pt-24 pb-12 px-6">
+      <div className="pt-20 sm:pt-24 pb-10 sm:pb-12 px-4 sm:px-6">
         <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-12">
-            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
+          <div className="text-center mb-8 sm:mb-12">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white mb-4">
               <span className="gradient-text">Regular Expressions</span>
             </h1>
-            <p className="text-gray-300 text-lg max-w-3xl mx-auto">Pattern matching constructs equivalent to regular languages and finite automata</p>
+            <p className="text-gray-300 text-base sm:text-lg max-w-3xl mx-auto px-2 sm:px-0">Pattern matching constructs equivalent to regular languages and finite automata</p>
           </div>
 
           <div className="glass-card rounded-2xl p-6 mb-6 fade-in-up stagger-1">

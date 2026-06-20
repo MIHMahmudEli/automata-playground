@@ -1,9 +1,14 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Automata Theory Platform - Master Formal Languages",
   description: "Interactive platform for learning and visualizing automata theory concepts including DFA, NFA, CFG, PDA, and Turing Machines.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

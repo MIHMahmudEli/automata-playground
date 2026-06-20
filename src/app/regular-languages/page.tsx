@@ -5,13 +5,13 @@ export default function RegularLanguagesWorkspace() {
   return (
     <>
       <WorkspaceNavbar title="Regular Languages" subtitle="Foundation of Finite Automata" />
-      <div className="pt-24 pb-12 px-6">
+      <div className="pt-20 sm:pt-24 pb-10 sm:pb-12 px-4 sm:px-6">
         <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-12">
-            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
+          <div className="text-center mb-8 sm:mb-12">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white mb-4">
               <span className="gradient-text">Regular Languages</span>
             </h1>
-            <p className="text-gray-300 text-lg max-w-3xl mx-auto">The foundation of finite automata and formal language theory</p>
+            <p className="text-gray-300 text-base sm:text-lg max-w-3xl mx-auto px-2 sm:px-0">The foundation of finite automata and formal language theory</p>
           </div>
 
           <div className="glass-card rounded-2xl p-6 mb-6 fade-in-up stagger-1">

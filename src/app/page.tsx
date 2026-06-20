@@ -29,7 +29,7 @@ export default function Home() {
       <ParticleBackground />
       <Navbar />
 
-      <section className="pt-32 pb-20 px-6">
+      <section className="pt-24 sm:pt-32 pb-16 sm:pb-20 px-4 sm:px-6">
         <div className="max-w-7xl mx-auto text-center">
           <div className="fade-in-up stagger-1">
             <span className="px-4 py-2 bg-purple-500/20 text-purple-300 rounded-full text-sm font-medium border border-purple-500/30">
@@ -42,7 +42,7 @@ export default function Home() {
           <p className="text-xl text-gray-300 max-w-3xl mx-auto mb-12 leading-relaxed fade-in-up stagger-3">
             Explore, visualize, and understand formal languages and automata through interactive tools and comprehensive workspaces.
           </p>
-          <div className="flex items-center justify-center space-x-4 fade-in-up stagger-4">
+          <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 fade-in-up stagger-4">
             <button onClick={scrollToTopics} className="px-8 py-4 explore-btn text-white font-semibold rounded-xl relative">
               <span className="relative z-10">Explore Topics</span>
             </button>
@@ -53,7 +53,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="topics" className="py-20 px-6">
+      <section id="topics" className="py-16 sm:py-20 px-4 sm:px-6">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">Choose Your Topic</h2>
@@ -92,7 +92,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section id="about" className="py-20 px-6">
+      <section id="about" className="py-16 sm:py-20 px-4 sm:px-6">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-4xl md:text-5xl font-bold text-white mb-6">About This Platform</h2>
           <p className="text-gray-300 text-lg leading-relaxed mb-8">
@@ -120,7 +120,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="py-12 px-6 border-t border-white/10">
+      <footer className="py-12 px-4 sm:px-6 border-t border-white/10">
         <div className="max-w-7xl mx-auto text-center">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
