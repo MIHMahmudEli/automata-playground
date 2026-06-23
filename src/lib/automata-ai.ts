@@ -108,8 +108,16 @@ export class AutomataAI {
   static async generateFromQuestion(question: string, type: string): Promise<AnyResult> {
     try {
       return await this.generateWithGroq(question, type, MAX_RETRIES);
-    } catch {
-      return this.generateFromLocalPrompt(question, type);
+    } catch (groqError: any) {
+      // Groq failed — try the limited local matcher as a backup. If that also
+      // can't handle the question, surface the REAL Groq error (e.g. missing
+      // API key, network/CORS failure) instead of the misleading
+      // "No matching pattern found" message from the local matcher.
+      try {
+        return await this.generateFromLocalPrompt(question, type);
+      } catch {
+        throw groqError;
+      }
     }
   }
 
@@ -297,6 +305,30 @@ From q1: on 0 → q0  on 1 → q1
 
 Step 4: Accept States: q0
 
+## OUTPUT FORMAT FOR DFA
+
+\`\`\`json
+{
+  "explanation": "Step 1: Language Analysis...\\nStep 2: State Design...\\nStep 3: Transitions...\\nStep 4: Verification...",
+  "data": {
+    "states": "q0,q1,q2",
+    "alphabet": "0,1",
+    "startState": "q0",
+    "acceptStates": "q2",
+    "transitions": "q0,0,q1\\nq0,1,q0\\nq1,0,q1\\nq1,1,q2"
+  }
+}
+\`\`\`
+
+## CRITICAL RULES FOR DFA
+- The top-level JSON MUST have exactly two keys: "explanation" (a string) and "data" (an object).
+- Inside "data", every field is a STRING, not an array or nested object.
+- "states", "alphabet", and "acceptStates" are comma-separated strings (e.g. "q0,q1,q2").
+- "startState" is a single state name. Use the keys "startState" and "acceptStates" (NOT "initial_state" or "accept_states").
+- "transitions" is a newline-separated string where each line is "from,symbol,to" (e.g. "q0,a,q1"). Do NOT use a nested object.
+- A DFA must be COMPLETE: every state must have exactly one transition for EACH symbol in the alphabet.
+- Only include symbols that are actually in the alphabet. Infer the alphabet from the question (e.g. "ending with ab" → alphabet {a,b}).
+
 Requested type: ${type}
 
 IMPORTANT: Wrap the entire JSON in \`\`\`json ... \`\`\` markers.`;
@@ -363,7 +395,10 @@ IMPORTANT: Wrap the entire JSON in \`\`\`json ... \`\`\` markers.`;
   }
 
   private static processAIResult(result: any, type: string): AnyResult {
-    const d = result.data;
+    const d = result?.data;
+    if (!d || typeof d !== 'object') {
+      throw new Error(`AI returned malformed ${type} (missing "data" object). Got keys: ${Object.keys(result || {}).join(', ') || 'none'}`);
+    }
     if (type === 'DFA') return this.createDFA(d.states, d.alphabet, d.startState, d.acceptStates, d.transitions, result.explanation);
     if (type === 'NFA') return this.createNFA(d.states, d.alphabet, d.startState, d.acceptStates, d.transitions, result.explanation);
     if (type === 'CFG') return this.createCFG(d.variables, d.terminals, d.startSymbol, d.productions, result.explanation);
